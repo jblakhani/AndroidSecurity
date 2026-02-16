@@ -13,6 +13,7 @@ const sensorToWidevine = new Map<string, string>();
 
 const CHALLENGE_TTL_SECONDS = 120;
 const VERDICT_TTL_SECONDS = 6 * 60 * 60;
+const COLLECTION_MAX_AGE_MS = 2 * 60 * 1000;
 
 app.get("/device/challenge", (_req: Request, res: Response) => {
   const issuedAt = nowEpochMs();
@@ -50,6 +51,26 @@ app.post("/device/verify", (req: Request, res: Response) => {
       riskScore: 95,
       reasonCodes: ["NONCE_INVALID_OR_EXPIRED"],
       ttlSeconds: 30
+    });
+    return;
+  }
+
+  if (payload.meta.nonceB64 !== payload.attestation.challengeB64) {
+    res.status(400).json({
+      verdict: "BLOCK",
+      riskScore: 95,
+      reasonCodes: ["NONCE_ATTESTATION_MISMATCH"],
+      ttlSeconds: 30
+    });
+    return;
+  }
+
+  if (Math.abs(now - payload.meta.collectedAtEpochMs) > COLLECTION_MAX_AGE_MS) {
+    res.status(400).json({
+      verdict: "RESTRICT",
+      riskScore: 70,
+      reasonCodes: ["COLLECTION_TIMESTAMP_INVALID"],
+      ttlSeconds: 60
     });
     return;
   }

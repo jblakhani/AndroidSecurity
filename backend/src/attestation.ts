@@ -11,6 +11,8 @@ const GOOGLE_ROOT_ISSUER_MARKERS = [
   "Android Keystore"
 ];
 
+const ANDROID_KEY_ATTESTATION_OID_DER = Buffer.from([0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0xD6, 0x79, 0x02, 0x01, 0x11]);
+
 export function verifyAttestationChain(challengeB64: string, certChainB64: string[]): AttestationCheck {
   const reasonCodes: string[] = [];
 
@@ -54,6 +56,11 @@ export function verifyAttestationChain(challengeB64: string, certChainB64: strin
     }
   }
 
+  const leaf = certs[0];
+  if (leaf.publicKey.asymmetricKeyType !== "ec") {
+    return { ok: false, reasonCodes: ["ATTESTATION_KEY_TYPE_INVALID"] };
+  }
+
   const root = certs[certs.length - 1];
   const rootIssuer = root.issuer;
   const rootLooksExpected = GOOGLE_ROOT_ISSUER_MARKERS.some((marker) => rootIssuer.includes(marker));
@@ -61,12 +68,16 @@ export function verifyAttestationChain(challengeB64: string, certChainB64: strin
     return { ok: false, reasonCodes: ["ATTESTATION_ROOT_UNTRUSTED"] };
   }
 
-  const leafRaw = certs[0].raw;
+  const leafRaw = leaf.raw;
+  if (!leafRaw.includes(ANDROID_KEY_ATTESTATION_OID_DER)) {
+    return { ok: false, reasonCodes: ["ATTESTATION_EXTENSION_MISSING"] };
+  }
+
   if (!leafRaw.includes(challenge)) {
     return { ok: false, reasonCodes: ["ATTESTATION_CHALLENGE_MISMATCH"] };
   }
 
-  reasonCodes.push("ATTESTATION_CHAIN_OK", "ATTESTATION_CHALLENGE_OK");
+  reasonCodes.push("ATTESTATION_CHAIN_OK", "ATTESTATION_CHALLENGE_OK", "ATTESTATION_EXTENSION_PRESENT");
   return { ok: true, reasonCodes };
 }
 

@@ -20,7 +20,12 @@ internal object KeystoreAttestation {
     private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
 
     fun attest(challengeOverrideB64: String?, alias: String = "device_identity_attest"): KeystoreResult {
-        val challenge = decodeOrRandomChallenge(challengeOverrideB64)
+        val challengeResult = decodeChallenge(challengeOverrideB64)
+        if (challengeResult.errorCode != null) {
+            return KeystoreResult(challengeResult.challengeB64, emptyList(), false, challengeResult.errorCode)
+        }
+
+        val challenge = challengeResult.challenge
         val challengeB64 = Base64.encodeToString(challenge, Base64.NO_WRAP)
 
         return try {
@@ -33,20 +38,23 @@ internal object KeystoreAttestation {
         }
     }
 
-    private fun decodeOrRandomChallenge(challengeOverrideB64: String?): ByteArray {
+    private fun decodeChallenge(challengeOverrideB64: String?): ChallengeDecodeResult {
         if (!challengeOverrideB64.isNullOrBlank()) {
-            try {
+            return try {
                 val decoded = Base64.decode(challengeOverrideB64, Base64.DEFAULT)
-                if (decoded.size in 16..128) {
-                    return decoded
+                if (decoded.size !in 16..128) {
+                    ChallengeDecodeResult(ByteArray(0), challengeOverrideB64, "KEYSTORE_ATTESTATION_FAILED")
+                } else {
+                    ChallengeDecodeResult(decoded, Base64.encodeToString(decoded, Base64.NO_WRAP), null)
                 }
             } catch (_: Exception) {
-                // fall through to random challenge generation
+                ChallengeDecodeResult(ByteArray(0), challengeOverrideB64, "KEYSTORE_ATTESTATION_FAILED")
             }
         }
+
         val randomChallenge = ByteArray(32)
         SecureRandom().nextBytes(randomChallenge)
-        return randomChallenge
+        return ChallengeDecodeResult(randomChallenge, Base64.encodeToString(randomChallenge, Base64.NO_WRAP), null)
     }
 
     private fun generate(alias: String, challenge: ByteArray, strongBox: Boolean): KeystoreResult? {
@@ -91,3 +99,9 @@ internal object KeystoreAttestation {
         }
     }
 }
+
+private data class ChallengeDecodeResult(
+    val challenge: ByteArray,
+    val challengeB64: String,
+    val errorCode: String?
+)

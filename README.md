@@ -132,11 +132,14 @@
      - `clientScore`
      - `meta`
    - `meta` must include `nonceB64` and `collectedAtEpochMs`.
+   - `attestation.challengeB64` must exactly equal `meta.nonceB64` (strict challenge binding).
+   - `collectedAtEpochMs` must be fresh (within server acceptance window).
 
 6. **Attestation verification path**
    - Parse X.509 cert chain from base64 DER.
    - Verify chain signatures leaf-to-root.
    - Verify challenge binding by checking challenge bytes in leaf cert DER.
+   - Enforce `meta.nonceB64 == attestation.challengeB64` before attestation chain acceptance.
    - Add reason codes (`ATTESTATION_CHAIN_OK`, `ATTESTATION_CHALLENGE_OK`, or failure codes).
 
 7. **Risk graph update**
