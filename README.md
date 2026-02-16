@@ -6,14 +6,12 @@
 - `Assets/Plugins/Security/Models/DeviceIdentityModels.cs`
 - `Assets/Plugins/Android/Security/build.gradle`
 - `Assets/Plugins/Android/Security/proguard-rules.pro`
-- `Assets/Plugins/Android/Security/CMakeLists.txt`
 - `Assets/Plugins/Android/Security/src/main/AndroidManifest.xml`
 - `Assets/Plugins/Android/Security/src/main/java/com/company/security/DeviceIdentityBridge.kt`
 - `Assets/Plugins/Android/Security/src/main/java/com/company/security/KeystoreAttestation.kt`
 - `Assets/Plugins/Android/Security/src/main/java/com/company/security/WidevineId.kt`
 - `Assets/Plugins/Android/Security/src/main/java/com/company/security/SensorFingerprint.kt`
 - `Assets/Plugins/Android/Security/src/main/java/com/company/security/EnvironmentAudit.kt`
-- `Assets/Plugins/Android/Security/src/main/java/com/company/security/native-audit.cpp`
 
 ## Step-by-step guide for Unity 3D engineer
 
@@ -115,9 +113,11 @@
    - `npm run build`
 
 3. **Run locally**
-   - Built-in Google attestation root pin set is included by default.
-   - Optionally add extra pins (recommended for pin rotation):
+   - Built-in Google attestation root pins are included by default.
+   - You can maintain pins offline in `backend/config/attestation_root_pins.txt` (one SHA-256 pin per line).
+   - Optional env-based extension/override for emergency rotation:
      - `export ATTESTATION_ROOT_SHA256_PINS="<extra_root_sha256_hex_1>,<extra_root_sha256_hex_2>"`
+     - `export ATTESTATION_ROOT_PIN_FILE="/absolute/path/to/attestation_root_pins.txt"`
    - `npm start`
    - Server binds to `PORT` env variable or `8080` by default.
 
@@ -142,7 +142,11 @@
 6. **Attestation verification path**
    - Parse X.509 cert chain from base64 DER.
    - Verify chain signatures leaf-to-root and ensure root is self-signed.
-   - Enforce pinned root trust: set `ATTESTATION_ROOT_SHA256_PINS` (comma-separated SHA-256 hex of full DER root certs).
+   - Enforce pinned root trust from layered sources:
+     - built-in defaults in backend,
+     - optional `backend/config/attestation_root_pins.txt`,
+     - optional `ATTESTATION_ROOT_SHA256_PINS` and `ATTESTATION_ROOT_PIN_FILE` overrides.
+   - Monitor `ATTESTATION_ROOT_UNTRUSTED`/`ATTESTATION_ROOT_PINSET_EMPTY` errors and update pins before root rotations impact traffic.
    - Parse Android key attestation extension OID `1.3.6.1.4.1.11129.2.1.17` from leaf cert DER.
    - Decode `attestationSecurityLevel`, `keymasterSecurityLevel`, and `attestationChallenge` from KeyDescription.
    - Enforce `meta.nonceB64 == attestation.challengeB64` and extension `attestationChallenge` equality.
@@ -242,7 +246,7 @@
 - Entire collection runs in a single background executor with bounded timeout (default 4000 ms).
 - Keystore attestation uses EC P-256 with challenge, StrongBox preferred on API 28+ and fallback supported.
 - Widevine `PROPERTY_DEVICE_UNIQUE_ID` is SHA-256 hashed immediately and never persisted in raw form.
-- Sensor collection reads accelerometer + gyroscope only, without dangerous permissions.
+- Sensor collection requires accelerometer and uses gyroscope when available, without dangerous permissions.
 - `/proc/self/maps` checks are read-only and best-effort; failures return `PROC_READ_DENIED` without crashing.
 - Risk scoring clamps to `[0,100]` and action mapping avoids `BLOCK` on a single medium-confidence signal.
 - Compatible target: Android 10–14+ with minSdk 23.

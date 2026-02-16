@@ -52,11 +52,12 @@ export function computeRisk(req: VerifyRequest, attestationOk: boolean, widevine
 
   score = Math.min(100, score);
 
-  const mediumSignals = [req.audit.rootScore, req.audit.hookScore, req.audit.virtScore].filter((s) => s >= 10 && s <= 17).length;
+  const highSignals = [req.audit.rootScore, req.audit.hookScore, req.audit.virtScore].filter((s) => s >= 18).length;
+  const extremeEvidence = req.audit.hookScore >= 22 || req.audit.rootScore >= 22;
 
   let verdict: RiskResult["verdict"] = "ALLOW";
   if (score >= 80) {
-    verdict = mediumSignals >= 2 ? "RESTRICT" : "BLOCK";
+    verdict = highSignals >= 2 || extremeEvidence ? "BLOCK" : "RESTRICT";
   } else if (score >= 60) {
     verdict = "RESTRICT";
   } else if (score >= 30) {

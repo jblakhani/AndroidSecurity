@@ -1,4 +1,6 @@
 import { X509Certificate, createHash, createPublicKey } from "crypto";
+import { existsSync, readFileSync } from "fs";
+import path from "path";
 
 export type AttestationCheck = {
   ok: boolean;
@@ -16,10 +18,12 @@ const SECURITY_LEVEL_LABELS: Record<number, string> = {
 };
 
 // Built-in Google Android attestation root certificate SHA-256 pins (DER cert hash).
-// Operators can add/override pins through ATTESTATION_ROOT_SHA256_PINS.
-const DEFAULT_ROOT_CERT_SHA256_PINS = new Set<string>([
+// Operators can extend using file/env sources without code changes.
+const DEFAULT_ROOT_CERT_SHA256_PINS = [
   "f92009e853b6b0454c7e1a7f6df83f6a7f2b6c9f4aee2b5f87c8f6f9e1ab7d4d"
-]);
+] as const;
+
+const DEFAULT_PIN_FILE_RELATIVE = "config/attestation_root_pins.txt";
 
 export function verifyAttestationChain(challengeB64: string, certChainB64: string[]): AttestationCheck {
   if (!challengeB64 || certChainB64.length === 0) {
@@ -119,12 +123,30 @@ function decodeCertificates(certChainB64: string[]): X509Certificate[] | null {
 }
 
 function getAllowedRootPins(): Set<string> {
+  const pinFilePath = process.env.ATTESTATION_ROOT_PIN_FILE || path.join(process.cwd(), DEFAULT_PIN_FILE_RELATIVE);
+  const filePins = loadPinsFromFile(pinFilePath);
   const envPins = (process.env.ATTESTATION_ROOT_SHA256_PINS ?? "")
     .split(",")
     .map((v) => v.trim().toLowerCase())
     .filter((v) => /^[a-f0-9]{64}$/.test(v));
 
-  return new Set([...DEFAULT_ROOT_CERT_SHA256_PINS, ...envPins]);
+  return new Set([...DEFAULT_ROOT_CERT_SHA256_PINS, ...filePins, ...envPins]);
+}
+
+function loadPinsFromFile(filePath: string): string[] {
+  try {
+    if (!existsSync(filePath)) {
+      return [];
+    }
+
+    return readFileSync(filePath, "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.trim().toLowerCase())
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .filter((line) => /^[a-f0-9]{64}$/.test(line));
+  } catch {
+    return [];
+  }
 }
 
 function sha256Hex(input: Buffer): string {

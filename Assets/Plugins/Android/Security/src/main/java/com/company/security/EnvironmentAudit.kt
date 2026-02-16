@@ -3,6 +3,7 @@ package com.company.security
 import android.os.Build
 import android.util.Log
 import java.io.File
+import java.io.BufferedReader
 
 internal data class EnvironmentAuditResult(
     val rootScore: Int,
@@ -73,23 +74,33 @@ internal object EnvironmentAudit {
         var score = 0
         var readError: String? = null
         try {
-            val maps = File("/proc/self/maps").readLines()
             val needles = listOf("frida", "xposed", "substrate", "riru", "zygisk", "edxp")
             var suspicious = 0
             var anonExec = 0
-            maps.forEach { line ->
-                val lc = line.lowercase()
-                if (needles.any { lc.contains(it) }) {
-                    suspicious++
-                    findings += "hook_map:${lc.take(120)}"
-                }
-                val parts = line.split(" ")
-                val perms = parts.getOrNull(1) ?: ""
-                val path = parts.lastOrNull() ?: ""
-                if (perms.contains('x') && path.startsWith("[") && path.contains("anon", ignoreCase = true)) {
-                    anonExec++
+
+            File("/proc/self/maps").bufferedReader().use { reader: BufferedReader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    val lc = line.lowercase()
+
+                    if (needles.any { lc.contains(it) }) {
+                        suspicious++
+                        findings += "hook_map:${lc.take(120)}"
+                    }
+
+                    val parts = line.split(' ', limit = 6).filter { it.isNotEmpty() }
+                    val perms = parts.getOrNull(1) ?: ""
+                    val path = parts.getOrNull(5) ?: ""
+                    if (perms.contains('x') && path.startsWith("[") && path.contains("anon", ignoreCase = true)) {
+                        anonExec++
+                    }
+
+                    if (suspicious >= 3 && anonExec > 6) {
+                        break
+                    }
                 }
             }
+
             if (suspicious > 0) score += 20
             if (anonExec > 6) {
                 score += 10

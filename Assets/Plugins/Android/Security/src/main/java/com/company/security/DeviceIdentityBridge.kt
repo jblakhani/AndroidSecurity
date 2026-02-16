@@ -227,9 +227,12 @@ class DeviceIdentityBridge {
         }
 
         private fun actionFor(score: Int, audit: EnvironmentAuditResult): String {
-            val mediumSignals = listOf(audit.rootScore, audit.hookScore, audit.virtScore).count { it in 10..17 }
+            val highSignals = listOf(audit.rootScore, audit.hookScore, audit.virtScore).count { it >= 18 }
+            val extremeEvidence = audit.hookScore >= 22 || audit.rootScore >= 22
+
             return when {
-                score >= 80 && mediumSignals <= 1 -> "BLOCK"
+                score >= 80 && (highSignals >= 2 || extremeEvidence) -> "BLOCK"
+                score >= 80 -> "RESTRICT"
                 score >= 60 -> "RESTRICT"
                 score >= 30 -> "FRICTION"
                 else -> "ALLOW"
