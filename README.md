@@ -114,6 +114,8 @@
    - `npm run build`
 
 3. **Run locally**
+   - Export root certificate pins first (required):
+     - `export ATTESTATION_ROOT_SHA256_PINS="<root_sha256_hex_1>,<root_sha256_hex_2>"`
    - `npm start`
    - Server binds to `PORT` env variable or `8080` by default.
 
@@ -137,15 +139,18 @@
 
 6. **Attestation verification path**
    - Parse X.509 cert chain from base64 DER.
-   - Verify chain signatures leaf-to-root.
-   - Verify challenge binding by checking challenge bytes in leaf cert DER.
-   - Enforce `meta.nonceB64 == attestation.challengeB64` before attestation chain acceptance.
-   - Add reason codes (`ATTESTATION_CHAIN_OK`, `ATTESTATION_CHALLENGE_OK`, or failure codes).
+   - Verify chain signatures leaf-to-root and ensure root is self-signed.
+   - Enforce pinned root trust: set `ATTESTATION_ROOT_SHA256_PINS` (comma-separated SHA-256 hex of full DER root certs).
+   - Parse Android key attestation extension OID `1.3.6.1.4.1.11129.2.1.17` from leaf cert DER.
+   - Decode `attestationSecurityLevel`, `keymasterSecurityLevel`, and `attestationChallenge` from KeyDescription.
+   - Enforce `meta.nonceB64 == attestation.challengeB64` and extension `attestationChallenge` equality.
+   - Add reason codes (`ATTESTATION_CHAIN_OK`, `ATTESTATION_ROOT_PIN_OK`, `ATTESTATION_CHALLENGE_OK`, or deterministic failure codes).
 
 7. **Risk graph update**
    - Key graph by `widevineIdSha256` (hashed identifier only).
    - Keep rolling risk, seen count, first/last seen timestamps.
    - Maintain sensor-to-widevine map to detect anomaly: widevine changed while sensor remains stable.
+   - Client SDK also persists sensor->widevine hash mapping locally and applies `+20` local score on stable-sensor ID change.
 
 8. **Server-side scoring and verdict**
    - Apply scoring rules and cap to `0..100`.
@@ -158,7 +163,6 @@
 
 9. **Production hardening checklist**
    - Replace in-memory stores with Redis/PostgreSQL.
-   - Add Google root trust anchors and full Android attestation extension parsing.
    - Add rate limiting and auth on both endpoints.
    - Add structured logging with no raw identifiers.
    - Add monitoring on nonce failures, attestation failures, and verdict distributions.

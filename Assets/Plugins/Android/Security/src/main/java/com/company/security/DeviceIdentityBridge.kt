@@ -11,6 +11,9 @@ import java.util.concurrent.TimeUnit
 
 class DeviceIdentityBridge {
     companion object {
+        private const val PREFS_NAME = "device_identity_sdk"
+        private const val SENSOR_MAP_PREFIX = "sensor_map_"
+
         @JvmStatic
         fun collect(optionsJson: String): String {
             val options = parseOptions(optionsJson)
@@ -45,12 +48,18 @@ class DeviceIdentityBridge {
                     timings["sensorMs"] = nowMs() - sensorStart
                     sf.errorCode?.let { errors += it }
 
+                    val anomalyWidevineChangedSensorStable = detectAndPersistWidevineSensorAnomaly(
+                        context = context,
+                        widevineHash = wv.hashSha256,
+                        sensorHash = sf.hashSha256
+                    )
+
                     val auditStart = nowMs()
                     val audit = if (options.enableAudit) EnvironmentAudit.run() else EnvironmentAuditResult(0, 0, 0, 0, emptyList())
                     timings["auditMs"] = nowMs() - auditStart
                     audit.errorCode?.let { errors += it }
 
-                    val score = score(ks, wv, sf, audit)
+                    val score = score(ks, wv, sf, audit, anomalyWidevineChangedSensorStable)
                     val action = actionFor(score, audit)
 
                     val meta = JSONObject()
@@ -166,7 +175,13 @@ class DeviceIdentityBridge {
             )
         }
 
-        private fun score(ks: KeystoreResult, wv: WidevineResult, sf: SensorResult, audit: EnvironmentAuditResult): Int {
+        private fun score(
+            ks: KeystoreResult,
+            wv: WidevineResult,
+            sf: SensorResult,
+            audit: EnvironmentAuditResult,
+            widevineChangedSensorStable: Boolean
+        ): Int {
             var score = 0
             if (ks.errorCode != null) score += 50
             if (wv.errorCode != null) score += 25
@@ -174,7 +189,25 @@ class DeviceIdentityBridge {
             if (audit.hookScore >= 18) score += 40
             if (audit.rootScore >= 15) score += 30
             if (audit.virtScore >= 15) score += 25
+            if (widevineChangedSensorStable) score += 20
             return score.coerceAtMost(100)
+        }
+
+        private fun detectAndPersistWidevineSensorAnomaly(
+            context: Context,
+            widevineHash: String?,
+            sensorHash: String?
+        ): Boolean {
+            if (widevineHash.isNullOrBlank() || sensorHash.isNullOrBlank()) {
+                return false
+            }
+
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val key = "$SENSOR_MAP_PREFIX$sensorHash"
+            val previousWidevine = prefs.getString(key, null)
+            val changed = previousWidevine != null && previousWidevine != widevineHash
+            prefs.edit().putString(key, widevineHash).apply()
+            return changed
         }
 
         private fun actionFor(score: Int, audit: EnvironmentAuditResult): String {
