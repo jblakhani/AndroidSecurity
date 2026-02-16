@@ -1,0 +1,3 @@
+-keep class com.company.security.DeviceIdentityBridge { *; }
+-keep class com.unity3d.player.UnityPlayer { *; }
+-dontwarn org.json.**
