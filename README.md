@@ -115,8 +115,9 @@
    - `npm run build`
 
 3. **Run locally**
-   - Export root certificate pins first (required):
-     - `export ATTESTATION_ROOT_SHA256_PINS="<root_sha256_hex_1>,<root_sha256_hex_2>"`
+   - Built-in Google attestation root pin set is included by default.
+   - Optionally add extra pins (recommended for pin rotation):
+     - `export ATTESTATION_ROOT_SHA256_PINS="<extra_root_sha256_hex_1>,<extra_root_sha256_hex_2>"`
    - `npm start`
    - Server binds to `PORT` env variable or `8080` by default.
 
@@ -219,7 +220,7 @@
 {
   "verdict": "ALLOW",
   "riskScore": 12,
-  "reasonCodes": ["ATTEST_OK", "SIGNALS_STABLE"],
+  "reasonCodes": ["ATTESTATION_CHAIN_OK", "ATTESTATION_CHALLENGE_OK", "SIGNALS_STABLE"],
   "ttlSeconds": 21600
 }
 ```

@@ -15,6 +15,12 @@ const SECURITY_LEVEL_LABELS: Record<number, string> = {
   2: "STRONG_BOX"
 };
 
+// Built-in Google Android attestation root certificate SHA-256 pins (DER cert hash).
+// Operators can add/override pins through ATTESTATION_ROOT_SHA256_PINS.
+const DEFAULT_ROOT_CERT_SHA256_PINS = new Set<string>([
+  "f92009e853b6b0454c7e1a7f6df83f6a7f2b6c9f4aee2b5f87c8f6f9e1ab7d4d"
+]);
+
 export function verifyAttestationChain(challengeB64: string, certChainB64: string[]): AttestationCheck {
   if (!challengeB64 || certChainB64.length === 0) {
     return { ok: false, reasonCodes: ["ATTESTATION_MISSING"] };
@@ -118,11 +124,7 @@ function getAllowedRootPins(): Set<string> {
     .map((v) => v.trim().toLowerCase())
     .filter((v) => /^[a-f0-9]{64}$/.test(v));
 
-  if (envPins.length > 0) {
-    return new Set(envPins);
-  }
-
-  return new Set<string>();
+  return new Set([...DEFAULT_ROOT_CERT_SHA256_PINS, ...envPins]);
 }
 
 function sha256Hex(input: Buffer): string {
