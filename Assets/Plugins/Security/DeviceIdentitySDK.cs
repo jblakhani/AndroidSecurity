@@ -13,9 +13,24 @@ namespace Company.Security
     {
         private const string BridgeClass = "com.company.security.DeviceIdentityBridge";
 
+        public async Task<ChallengeResponse> GetChallengeAsync(Uri challengeEndpoint)
+        {
+            if (challengeEndpoint == null) throw new ArgumentNullException(nameof(challengeEndpoint));
+            using var client = new HttpClient();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var response = await client.GetAsync(challengeEndpoint, cts.Token);
+            response.EnsureSuccessStatusCode();
+            var raw = await response.Content.ReadAsStringAsync();
+            return JsonUtility.FromJson<ChallengeResponse>(raw);
+        }
+
         public async Task<DeviceRiskProfile> CollectAsync(CollectOptions opts)
         {
             opts ??= new CollectOptions();
+            if (opts.collectedAtEpochMs <= 0)
+            {
+                opts.collectedAtEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            }
 #if UNITY_ANDROID && !UNITY_EDITOR
             return await Task.Run(() =>
             {
@@ -36,7 +51,7 @@ namespace Company.Security
                     manufacturer = SystemInfo.deviceManufacturer,
                     model = SystemInfo.deviceModel
                 },
-                collectionMeta = new CollectionMeta { errorCodes = new List<string> { "PLATFORM_UNSUPPORTED" } },
+                collectionMeta = new CollectionMeta { errorCodes = new List<string> { "PLATFORM_UNSUPPORTED" }, nonceB64 = opts.nonceB64, collectedAtEpochMs = opts.collectedAtEpochMs },
                 localRiskScore = 100,
                 suggestedAction = "BLOCK"
             };
@@ -89,7 +104,7 @@ namespace Company.Security
             });
 #else
             await Task.Delay(1);
-            return new SelfTestResult { errorCodes = new List<string> { "PLATFORM_UNSUPPORTED" } };
+            return new SelfTestResult { errorCodes = new List<string> { "PLATFORM_UNSUPPORTED" }, timingsMs = new List<TimingEntry>() };
 #endif
         }
 

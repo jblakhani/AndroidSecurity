@@ -31,7 +31,7 @@ class DeviceIdentityBridge {
                         .put("model", Build.MODEL ?: "")
 
                     val ksStart = nowMs()
-                    val ks = KeystoreAttestation.attest()
+                    val ks = KeystoreAttestation.attest(options.nonceB64)
                     timings["keystoreMs"] = nowMs() - ksStart
                     ks.errorCode?.let { errors += it }
 
@@ -60,6 +60,8 @@ class DeviceIdentityBridge {
                         .put("sensorMs", timings["sensorMs"] ?: 0)
                         .put("auditMs", timings["auditMs"] ?: 0)
                         .put("errorCodes", JSONArray(errors.sorted()))
+                        .put("nonceB64", options.nonceB64)
+                        .put("collectedAtEpochMs", options.collectedAtEpochMs)
 
                     JSONObject()
                         .put("app", app)
@@ -88,13 +90,23 @@ class DeviceIdentityBridge {
                 JSONObject()
                     .put("localRiskScore", 100)
                     .put("suggestedAction", "BLOCK")
-                    .put("collectionMeta", JSONObject().put("errorCodes", JSONArray(listOf("TIMEOUT"))).put("totalMs", options.timeoutMs))
+                    .put("collectionMeta", JSONObject()
+                        .put("errorCodes", JSONArray(listOf("TIMEOUT")))
+                        .put("totalMs", options.timeoutMs)
+                        .put("nonceB64", options.nonceB64)
+                        .put("collectedAtEpochMs", options.collectedAtEpochMs)
+                    )
                     .toString()
             } catch (_: Exception) {
                 JSONObject()
                     .put("localRiskScore", 100)
                     .put("suggestedAction", "BLOCK")
-                    .put("collectionMeta", JSONObject().put("errorCodes", JSONArray(listOf("INTERNAL_EXCEPTION"))).put("totalMs", nowMs()))
+                    .put("collectionMeta", JSONObject()
+                        .put("errorCodes", JSONArray(listOf("INTERNAL_EXCEPTION")))
+                        .put("totalMs", nowMs())
+                        .put("nonceB64", options.nonceB64)
+                        .put("collectedAtEpochMs", options.collectedAtEpochMs)
+                    )
                     .toString()
             } finally {
                 executor.shutdownNow()
@@ -105,17 +117,17 @@ class DeviceIdentityBridge {
         fun selfTest(timeoutMs: Int): String {
             val context = UnityPlayer.currentActivity.applicationContext
             val start = nowMs()
-            val timings = JSONObject()
+            val timingEntries = JSONArray()
             val errors = mutableListOf<String>()
 
             val ksStart = nowMs()
-            val ks = KeystoreAttestation.attest()
-            timings.put("keystoreMs", nowMs() - ksStart)
+            val ks = KeystoreAttestation.attest(null)
+            timingEntries.put(JSONObject().put("key", "keystoreMs").put("value", nowMs() - ksStart))
             ks.errorCode?.let { errors += it }
 
             val wvStart = nowMs()
             val wv = WidevineId.collectHash()
-            timings.put("widevineMs", nowMs() - wvStart)
+            timingEntries.put(JSONObject().put("key", "widevineMs").put("value", nowMs() - wvStart))
             wv.errorCode?.let { errors += it }
 
             val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as android.hardware.SensorManager
@@ -135,19 +147,22 @@ class DeviceIdentityBridge {
                 .put("gyroAvailable", gyro)
                 .put("procReadable", procReadable)
                 .put("totalMs", (nowMs() - start).coerceAtMost(timeoutMs))
-                .put("timingsMs", timings)
+                .put("timingsMs", timingEntries)
                 .put("errorCodes", JSONArray(errors.sorted()))
                 .toString()
         }
 
         private fun parseOptions(optionsJson: String): CollectOptions {
             val j = try { JSONObject(optionsJson) } catch (_: Exception) { JSONObject() }
+            val collectedAtEpochMs = j.optLong("collectedAtEpochMs", System.currentTimeMillis())
             return CollectOptions(
                 sampleCount = j.optInt("sampleCount", 200).coerceIn(50, 500),
                 sensorDurationMs = j.optInt("sensorDurationMs", 1500).coerceIn(400, 2500),
                 enableWidevine = j.optBoolean("enableWidevine", true),
                 enableAudit = j.optBoolean("enableAudit", true),
-                timeoutMs = j.optInt("timeoutMs", 4000).coerceIn(1000, 4000)
+                timeoutMs = j.optInt("timeoutMs", 4000).coerceIn(1000, 4000),
+                nonceB64 = j.optString("nonceB64", ""),
+                collectedAtEpochMs = if (collectedAtEpochMs > 0) collectedAtEpochMs else System.currentTimeMillis()
             )
         }
 
@@ -190,5 +205,7 @@ private data class CollectOptions(
     val sensorDurationMs: Int,
     val enableWidevine: Boolean,
     val enableAudit: Boolean,
-    val timeoutMs: Int
+    val timeoutMs: Int,
+    val nonceB64: String,
+    val collectedAtEpochMs: Long
 )

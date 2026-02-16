@@ -62,31 +62,39 @@
                timeoutMs = 4000
            };
 
+           ChallengeResponse challenge = await _sdk.GetChallengeAsync(new Uri("https://api.example.com/device/challenge"));
+           opts.nonceB64 = challenge.nonceB64;
            DeviceRiskProfile profile = await _sdk.CollectAsync(opts);
-           Debug.Log($"Risk={profile.localRiskScore}, Action={profile.suggestedAction}");
+           ServerVerdict verdict = await _sdk.VerifyWithServerAsync(profile, new Uri("https://api.example.com/device/verify"));
+           Debug.Log($"ServerVerdict={verdict.verdict}, Score={verdict.riskScore}");
        }
    }
    ```
 
-7. **Call server verification endpoint**
-   - Use `VerifyWithServerAsync(profile, endpoint)` after collection.
+7. **Call challenge endpoint before collection**
+   - Get nonce first using `GetChallengeAsync(challengeEndpoint)`.
+   - Put returned nonce into `CollectOptions.nonceB64` before calling `CollectAsync`.
+
+8. **Call server verification endpoint**
+   - Use `VerifyWithServerAsync(profile, verifyEndpoint)` after collection.
    - Recommended flow:
-     - Get nonce from `GET /device/challenge`
-     - Collect profile
-     - Send to `POST /device/verify`
+     - `GET /device/challenge`
+     - set `opts.nonceB64 = challenge.nonceB64`
+     - `CollectAsync(opts)`
+     - `POST /device/verify`
      - Cache `verdict` until TTL expiry
 
-8. **Use suggested action for game gating**
+9. **Use suggested action for game gating**
    - `ALLOW`: normal flow
    - `FRICTION`: add soft friction (extra validation/challenge)
    - `RESTRICT`: reduce trust-sensitive actions
    - `BLOCK`: deny high-risk entry
 
-9. **Run SelfTest in QA build**
+10. **Run SelfTest in QA build**
    - Call `SelfTestAsync()` to verify signal availability and timing without exposing raw identifiers.
    - Use this during device matrix testing before production rollout.
 
-10. **Production rollout checklist**
+11. **Production rollout checklist**
     - Test on Android 10–14 physical devices.
     - Validate StrongBox fallback behavior on devices without StrongBox.
     - Confirm timeout behavior under CPU pressure.

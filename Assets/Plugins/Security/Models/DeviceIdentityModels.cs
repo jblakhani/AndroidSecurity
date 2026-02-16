@@ -12,6 +12,8 @@ namespace Company.Security.Models
         public bool enableAudit = true;
         public int timeoutMs = 4000;
         public bool selfTest = false;
+        public string nonceB64;
+        public long collectedAtEpochMs;
     }
 
     [Serializable]
@@ -52,6 +54,8 @@ namespace Company.Security.Models
         public int sensorMs;
         public int auditMs;
         public List<string> errorCodes;
+        public string nonceB64;
+        public long collectedAtEpochMs;
     }
 
     [Serializable]
@@ -78,6 +82,20 @@ namespace Company.Security.Models
     }
 
     [Serializable]
+    public class ChallengeResponse
+    {
+        public string nonceB64;
+        public long expiresAt;
+    }
+
+    [Serializable]
+    public class TimingEntry
+    {
+        public string key;
+        public int value;
+    }
+
+    [Serializable]
     public class SelfTestResult
     {
         public bool keystoreAvailable;
@@ -86,7 +104,7 @@ namespace Company.Security.Models
         public bool gyroAvailable;
         public bool procReadable;
         public int totalMs;
-        public Dictionary<string, int> timingsMs;
+        public List<TimingEntry> timingsMs;
         public List<string> errorCodes;
     }
 }

@@ -3,11 +3,11 @@ package com.company.security
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.util.Base64
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
-import java.util.Base64
 
 internal data class KeystoreResult(
     val challengeB64: String,
@@ -19,10 +19,9 @@ internal data class KeystoreResult(
 internal object KeystoreAttestation {
     private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
 
-    fun attest(alias: String = "device_identity_attest"): KeystoreResult {
-        val challenge = ByteArray(32)
-        SecureRandom().nextBytes(challenge)
-        val challengeB64 = Base64.getEncoder().encodeToString(challenge)
+    fun attest(challengeOverrideB64: String?, alias: String = "device_identity_attest"): KeystoreResult {
+        val challenge = decodeOrRandomChallenge(challengeOverrideB64)
+        val challengeB64 = Base64.encodeToString(challenge, Base64.NO_WRAP)
 
         return try {
             val strongBoxAttempt = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
@@ -32,6 +31,22 @@ internal object KeystoreAttestation {
         } catch (_: Exception) {
             KeystoreResult(challengeB64, emptyList(), false, "KEYSTORE_ATTESTATION_FAILED")
         }
+    }
+
+    private fun decodeOrRandomChallenge(challengeOverrideB64: String?): ByteArray {
+        if (!challengeOverrideB64.isNullOrBlank()) {
+            try {
+                val decoded = Base64.decode(challengeOverrideB64, Base64.DEFAULT)
+                if (decoded.size in 16..128) {
+                    return decoded
+                }
+            } catch (_: Exception) {
+                // fall through to random challenge generation
+            }
+        }
+        val randomChallenge = ByteArray(32)
+        SecureRandom().nextBytes(randomChallenge)
+        return randomChallenge
     }
 
     private fun generate(alias: String, challenge: ByteArray, strongBox: Boolean): KeystoreResult? {
@@ -62,14 +77,14 @@ internal object KeystoreAttestation {
 
             val certs = keyStore.getCertificateChain(alias)
                 ?.mapNotNull { cert ->
-                    (cert as? X509Certificate)?.encoded?.let { Base64.getEncoder().encodeToString(it) }
+                    (cert as? X509Certificate)?.encoded?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
                 }
                 ?: emptyList()
 
             if (certs.isEmpty()) {
-                KeystoreResult(Base64.getEncoder().encodeToString(challenge), certs, strongBox, "KEYSTORE_ATTESTATION_FAILED")
+                KeystoreResult(Base64.encodeToString(challenge, Base64.NO_WRAP), certs, strongBox, "KEYSTORE_ATTESTATION_FAILED")
             } else {
-                KeystoreResult(Base64.getEncoder().encodeToString(challenge), certs, strongBox, null)
+                KeystoreResult(Base64.encodeToString(challenge, Base64.NO_WRAP), certs, strongBox, null)
             }
         } catch (_: Exception) {
             null
