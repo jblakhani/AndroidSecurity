@@ -225,6 +225,18 @@
 }
 ```
 
+## Debugging and observability
+
+- Unity layer logs with tag `[DeviceIdentitySDK]` for challenge, collect, verify, cache hits/misses, and self-test lifecycle.
+- Android layer logs with tags:
+  - `DeviceIdentityBridge`
+  - `KeystoreAttestation`
+  - `WidevineId`
+  - `SensorFingerprint`
+  - `EnvironmentAudit`
+- Backend logs with prefix `[device-backend]` at `INFO/WARN` for challenge issuance, verify rejects, anomaly detection, and final verdict summary.
+- Logs intentionally avoid raw identifiers; only hashed identifiers and high-level state are emitted.
+
 ## Performance and compatibility notes
 
 - Entire collection runs in a single background executor with bounded timeout (default 4000 ms).

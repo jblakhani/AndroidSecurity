@@ -1,6 +1,7 @@
 package com.company.security
 
 import android.os.Build
+import android.util.Log
 import java.io.File
 
 internal data class EnvironmentAuditResult(
@@ -13,6 +14,8 @@ internal data class EnvironmentAuditResult(
 )
 
 internal object EnvironmentAudit {
+    private const val TAG = "EnvironmentAudit"
+
     fun run(): EnvironmentAuditResult {
         val findings = mutableListOf<String>()
 
@@ -21,7 +24,7 @@ internal object EnvironmentAudit {
         val virtScore = detectVirtualization(findings)
         val tamperScore = detectTamper(findings)
 
-        return EnvironmentAuditResult(
+        val result = EnvironmentAuditResult(
             rootScore = rootScore,
             hookScore = hookData.first,
             virtScore = virtScore,
@@ -29,6 +32,9 @@ internal object EnvironmentAudit {
             findings = findings,
             errorCode = hookData.second
         )
+
+        Log.i(TAG, "run completed root=$rootScore hook=${hookData.first} virt=$virtScore tamper=$tamperScore error=${hookData.second}")
+        return result
     }
 
     private fun detectRoot(findings: MutableList<String>): Int {
@@ -89,9 +95,10 @@ internal object EnvironmentAudit {
                 score += 10
                 findings += "anon_exec_regions:$anonExec"
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             readError = "PROC_READ_DENIED"
             findings += "proc_maps_unreadable"
+            Log.w(TAG, "detectHooks unable to read /proc/self/maps: ${e.message}")
         }
         return Pair(score.coerceAtMost(25), readError)
     }

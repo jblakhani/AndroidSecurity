@@ -1,6 +1,7 @@
 package com.company.security
 
 import android.media.MediaDrm
+import android.util.Log
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -11,6 +12,7 @@ internal data class WidevineResult(
 
 internal object WidevineId {
     private val WIDEVINE_UUID: UUID = UUID(-0x121074568629b532L, -0x5c37d8232ae2de13L)
+    private const val TAG = "WidevineId"
 
     fun collectHash(): WidevineResult {
         return try {
@@ -19,10 +21,13 @@ internal object WidevineId {
             val hashed = sha256Hex(raw)
             raw.fill(0)
             drm.release()
+            Log.i(TAG, "collectHash success")
             WidevineResult(hashSha256 = hashed)
         } catch (unsupported: UnsupportedOperationException) {
+            Log.w(TAG, "collectHash unsupported: ${unsupported.message}")
             WidevineResult(errorCode = "WIDEVINE_UNSUPPORTED")
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "collectHash exception: ${e.message}")
             WidevineResult(errorCode = "WIDEVINE_EXCEPTION")
         }
     }

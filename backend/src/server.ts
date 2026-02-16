@@ -26,12 +26,14 @@ app.get("/device/challenge", (_req: Request, res: Response) => {
     expiresAtEpochMs: expiresAt
   });
 
+  logInfo("challenge issued", { expiresAt });
   res.status(200).json({ nonceB64, expiresAt });
 });
 
 app.post("/device/verify", (req: Request, res: Response) => {
   const parsed = verifyRequestSchema.safeParse(req.body);
   if (!parsed.success) {
+    logWarn("verify payload invalid", { issueCount: parsed.error.issues.length });
     res.status(400).json({
       verdict: "RESTRICT",
       riskScore: 80,
@@ -46,6 +48,7 @@ app.post("/device/verify", (req: Request, res: Response) => {
 
   const nonceOk = store.consumeValidNonce(payload.meta.nonceB64, now);
   if (!nonceOk) {
+    logWarn("verify rejected: invalid/expired nonce", { collectedAt: payload.meta.collectedAtEpochMs });
     res.status(400).json({
       verdict: "BLOCK",
       riskScore: 95,
@@ -56,6 +59,7 @@ app.post("/device/verify", (req: Request, res: Response) => {
   }
 
   if (payload.meta.nonceB64 !== payload.attestation.challengeB64) {
+    logWarn("verify rejected: nonce/challenge mismatch", { collectedAt: payload.meta.collectedAtEpochMs });
     res.status(400).json({
       verdict: "BLOCK",
       riskScore: 95,
@@ -66,6 +70,10 @@ app.post("/device/verify", (req: Request, res: Response) => {
   }
 
   if (Math.abs(now - payload.meta.collectedAtEpochMs) > COLLECTION_MAX_AGE_MS) {
+    logWarn("verify rejected: collection timestamp outside freshness window", {
+      collectedAt: payload.meta.collectedAtEpochMs,
+      now
+    });
     res.status(400).json({
       verdict: "RESTRICT",
       riskScore: 70,
@@ -85,6 +93,7 @@ app.post("/device/verify", (req: Request, res: Response) => {
     const knownWidevine = sensorToWidevine.get(sensorHash);
     if (knownWidevine && knownWidevine !== widevineHash) {
       widevineChangedSensorStable = true;
+      logWarn("stable-sensor identifier anomaly detected");
     }
     sensorToWidevine.set(sensorHash, widevineHash);
   }
@@ -103,10 +112,26 @@ app.post("/device/verify", (req: Request, res: Response) => {
     ttlSeconds: VERDICT_TTL_SECONDS
   };
 
+  logInfo("verify completed", {
+    verdict: response.verdict,
+    riskScore: response.riskScore,
+    clientScore: payload.clientScore.localRiskScore,
+    attestationOk: attestation.ok,
+    reasonCount: response.reasonCodes.length
+  });
+
   res.status(200).json(response);
 });
 
 const port = Number(process.env.PORT || 8080);
 app.listen(port, () => {
-  process.stdout.write(`Device identity backend listening on :${port}\n`);
+  logInfo(`Device identity backend listening on :${port}`);
 });
+
+function logInfo(message: string, context?: Record<string, unknown>): void {
+  process.stdout.write(`[device-backend][INFO] ${message}${context ? ` ${JSON.stringify(context)}` : ""}\n`);
+}
+
+function logWarn(message: string, context?: Record<string, unknown>): void {
+  process.stdout.write(`[device-backend][WARN] ${message}${context ? ` ${JSON.stringify(context)}` : ""}\n`);
+}

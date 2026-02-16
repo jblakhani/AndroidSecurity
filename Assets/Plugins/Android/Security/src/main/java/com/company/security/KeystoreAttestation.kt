@@ -4,6 +4,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -18,10 +19,12 @@ internal data class KeystoreResult(
 
 internal object KeystoreAttestation {
     private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
+    private const val TAG = "KeystoreAttestation"
 
     fun attest(challengeOverrideB64: String?, alias: String = "device_identity_attest"): KeystoreResult {
         val challengeResult = decodeChallenge(challengeOverrideB64)
         if (challengeResult.errorCode != null) {
+            Log.w(TAG, "attest rejected challenge override due to decode/size failure")
             return KeystoreResult(challengeResult.challengeB64, emptyList(), false, challengeResult.errorCode)
         }
 
@@ -30,10 +33,12 @@ internal object KeystoreAttestation {
 
         return try {
             val strongBoxAttempt = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+            Log.i(TAG, "attest start strongBoxAttempt=$strongBoxAttempt hasOverride=${!challengeOverrideB64.isNullOrBlank()}")
             val result = generate(alias, challenge, strongBox = strongBoxAttempt)
             result ?: generate(alias, challenge, strongBox = false)
                 ?: KeystoreResult(challengeB64, emptyList(), false, "KEYSTORE_ATTESTATION_FAILED")
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "attest exception: ${e.message}")
             KeystoreResult(challengeB64, emptyList(), false, "KEYSTORE_ATTESTATION_FAILED")
         }
     }
@@ -89,12 +94,16 @@ internal object KeystoreAttestation {
                 }
                 ?: emptyList()
 
-            if (certs.isEmpty()) {
+            val out = if (certs.isEmpty()) {
                 KeystoreResult(Base64.encodeToString(challenge, Base64.NO_WRAP), certs, strongBox, "KEYSTORE_ATTESTATION_FAILED")
             } else {
                 KeystoreResult(Base64.encodeToString(challenge, Base64.NO_WRAP), certs, strongBox, null)
             }
-        } catch (_: Exception) {
+
+            Log.i(TAG, "generate completed strongBox=$strongBox certChainSize=${certs.size} error=${out.errorCode}")
+            out
+        } catch (e: Exception) {
+            Log.w(TAG, "generate failed strongBox=$strongBox reason=${e.message}")
             null
         }
     }

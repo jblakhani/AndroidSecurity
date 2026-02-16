@@ -2,6 +2,7 @@ package com.company.security
 
 import android.content.Context
 import android.os.Build
+import android.util.Log
 import com.unity3d.player.UnityPlayer
 import org.json.JSONArray
 import org.json.JSONObject
@@ -13,6 +14,7 @@ class DeviceIdentityBridge {
     companion object {
         private const val PREFS_NAME = "device_identity_sdk"
         private const val SENSOR_MAP_PREFIX = "sensor_map_"
+        private const val TAG = "DeviceIdentityBridge"
 
         @JvmStatic
         fun collect(optionsJson: String): String {
@@ -20,6 +22,8 @@ class DeviceIdentityBridge {
             val context = UnityPlayer.currentActivity.applicationContext
             val startTotal = System.nanoTime()
             val errors = mutableListOf<String>()
+
+            Log.i(TAG, "collect start timeoutMs=${options.timeoutMs} sampleCount=${options.sampleCount} sensorDurationMs=${options.sensorDurationMs} enableWidevine=${options.enableWidevine} enableAudit=${options.enableAudit} hasNonce=${options.nonceB64.isNotBlank()}")
 
             val executor = Executors.newSingleThreadExecutor()
             return try {
@@ -72,6 +76,8 @@ class DeviceIdentityBridge {
                         .put("nonceB64", options.nonceB64)
                         .put("collectedAtEpochMs", options.collectedAtEpochMs)
 
+                    Log.i(TAG, "collect completed score=$score action=$action totalMs=${meta.getInt("totalMs")} errors=${errors.sorted()}")
+
                     JSONObject()
                         .put("app", app)
                         .put("keystoreAttestation", JSONObject()
@@ -96,6 +102,7 @@ class DeviceIdentityBridge {
                 }
                 executor.submit(task).get(options.timeoutMs.toLong(), TimeUnit.MILLISECONDS)
             } catch (_: java.util.concurrent.TimeoutException) {
+                Log.w(TAG, "collect timeout after ${options.timeoutMs}ms")
                 JSONObject()
                     .put("localRiskScore", 100)
                     .put("suggestedAction", "BLOCK")
@@ -106,7 +113,8 @@ class DeviceIdentityBridge {
                         .put("collectedAtEpochMs", options.collectedAtEpochMs)
                     )
                     .toString()
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.e(TAG, "collect failed: ${e.message}")
                 JSONObject()
                     .put("localRiskScore", 100)
                     .put("suggestedAction", "BLOCK")
@@ -129,6 +137,8 @@ class DeviceIdentityBridge {
             val timingEntries = JSONArray()
             val errors = mutableListOf<String>()
 
+            Log.i(TAG, "selfTest start timeoutMs=$timeoutMs")
+
             val ksStart = nowMs()
             val ks = KeystoreAttestation.attest(null)
             timingEntries.put(JSONObject().put("key", "keystoreMs").put("value", nowMs() - ksStart))
@@ -149,7 +159,7 @@ class DeviceIdentityBridge {
                 false
             }
 
-            return JSONObject()
+            val result = JSONObject()
                 .put("keystoreAvailable", ks.errorCode == null)
                 .put("widevineAvailable", wv.errorCode == null)
                 .put("accelerometerAvailable", accel)
@@ -159,6 +169,9 @@ class DeviceIdentityBridge {
                 .put("timingsMs", timingEntries)
                 .put("errorCodes", JSONArray(errors.sorted()))
                 .toString()
+
+            Log.i(TAG, "selfTest completed errors=${errors.sorted()}")
+            return result
         }
 
         private fun parseOptions(optionsJson: String): CollectOptions {
@@ -206,6 +219,9 @@ class DeviceIdentityBridge {
             val key = "$SENSOR_MAP_PREFIX$sensorHash"
             val previousWidevine = prefs.getString(key, null)
             val changed = previousWidevine != null && previousWidevine != widevineHash
+            if (changed) {
+                Log.w(TAG, "stable-sensor widevine change detected; applying anomaly score")
+            }
             prefs.edit().putString(key, widevineHash).apply()
             return changed
         }

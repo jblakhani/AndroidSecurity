@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.util.Log
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -17,17 +18,22 @@ internal data class SensorResult(
 )
 
 internal object SensorFingerprint {
+    private const val TAG = "SensorFingerprint"
+
     fun collect(context: Context, targetSamples: Int, durationMs: Int): SensorResult {
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         val gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         if (accel == null || gyro == null) {
+            Log.w(TAG, "collect sensors missing accel=${accel != null} gyro=${gyro != null}")
             return SensorResult(errorCode = "SENSOR_NOT_AVAILABLE")
         }
 
         val latch = CountDownLatch(1)
         val accSamples = mutableListOf<FloatArray>()
         val gyroSamples = mutableListOf<FloatArray>()
+
+        Log.i(TAG, "collect start targetSamples=$targetSamples durationMs=$durationMs")
 
         val listener = object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent) {
@@ -50,7 +56,9 @@ internal object SensorFingerprint {
         sensorManager.unregisterListener(listener)
 
         if (accSamples.size < 20 || gyroSamples.size < 20) {
-            return SensorResult(sampleCount = minOf(accSamples.size, gyroSamples.size), errorCode = "SENSOR_NOT_AVAILABLE")
+            val samples = minOf(accSamples.size, gyroSamples.size)
+            Log.w(TAG, "collect insufficient samples=$samples completed=$completed")
+            return SensorResult(sampleCount = samples, errorCode = "SENSOR_NOT_AVAILABLE")
         }
 
         val features = mutableListOf<Int>()
@@ -67,7 +75,9 @@ internal object SensorFingerprint {
         val hash = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
             .joinToString("") { "%02x".format(it) }
 
-        return SensorResult(hashSha256 = hash, sampleCount = minOf(accSamples.size, gyroSamples.size))
+        val totalSamples = minOf(accSamples.size, gyroSamples.size)
+        Log.i(TAG, "collect success samples=$totalSamples completed=$completed")
+        return SensorResult(hashSha256 = hash, sampleCount = totalSamples)
     }
 
     private fun extractFeatures(samples: List<FloatArray>): List<Int> {
