@@ -92,6 +92,66 @@
     - Confirm timeout behavior under CPU pressure.
     - Confirm no raw Widevine ID is logged/stored by analytics/crash tooling.
 
+## Step-by-step guide for backend engineer (TypeScript)
+
+1. **Open backend project**
+   - Backend code is in `backend/`.
+   - Endpoints implemented:
+     - `GET /device/challenge`
+     - `POST /device/verify`
+
+2. **Install and build**
+   - `cd backend`
+   - `npm install`
+   - `npm run build`
+
+3. **Run locally**
+   - `npm start`
+   - Server binds to `PORT` env variable or `8080` by default.
+
+4. **Challenge endpoint flow**
+   - Client requests `GET /device/challenge`.
+   - Backend issues a nonce (`nonceB64`) with expiry (`expiresAt`).
+   - Nonce is single-use and removed when consumed by `/device/verify`.
+
+5. **Verify endpoint payload contract**
+   - Validate request using strict schema (`zod`) in `backend/src/types.ts`.
+   - Require these top-level sections:
+     - `app`
+     - `attestation`
+     - `ids`
+     - `audit`
+     - `clientScore`
+     - `meta`
+   - `meta` must include `nonceB64` and `collectedAtEpochMs`.
+
+6. **Attestation verification path**
+   - Parse X.509 cert chain from base64 DER.
+   - Verify chain signatures leaf-to-root.
+   - Verify challenge binding by checking challenge bytes in leaf cert DER.
+   - Add reason codes (`ATTESTATION_CHAIN_OK`, `ATTESTATION_CHALLENGE_OK`, or failure codes).
+
+7. **Risk graph update**
+   - Key graph by `widevineIdSha256` (hashed identifier only).
+   - Keep rolling risk, seen count, first/last seen timestamps.
+   - Maintain sensor-to-widevine map to detect anomaly: widevine changed while sensor remains stable.
+
+8. **Server-side scoring and verdict**
+   - Apply scoring rules and cap to `0..100`.
+   - Merge server score with client score using max.
+   - Return deterministic response:
+     - `verdict`
+     - `riskScore`
+     - `reasonCodes`
+     - `ttlSeconds`
+
+9. **Production hardening checklist**
+   - Replace in-memory stores with Redis/PostgreSQL.
+   - Add Google root trust anchors and full Android attestation extension parsing.
+   - Add rate limiting and auth on both endpoints.
+   - Add structured logging with no raw identifiers.
+   - Add monitoring on nonce failures, attestation failures, and verdict distributions.
+
 ## Example request payload (`POST /device/verify`)
 
 ```json
@@ -130,7 +190,9 @@
     "widevineMs": 31,
     "sensorMs": 660,
     "auditMs": 38,
-    "errorCodes": []
+    "errorCodes": [],
+    "nonceB64": "N7fQ6cUK4QJf1D9uXfW5P2Zp6k8m3Y8U8hCq6mV6Y0Y=",
+    "collectedAtEpochMs": 1719791012000
   }
 }
 ```
