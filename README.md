@@ -250,3 +250,144 @@
 - `/proc/self/maps` checks are read-only and best-effort; failures return `PROC_READ_DENIED` without crashing.
 - Risk scoring clamps to `[0,100]` and action mapping avoids `BLOCK` on a single medium-confidence signal.
 - Compatible target: Android 10–14+ with minSdk 23.
+
+## Ultra-detailed setup checklist (for first-time integrators)
+
+If you want a no-assumption setup, follow this exact sequence and do not skip steps.
+
+### A) Unity + Android plugin setup (click-by-click)
+
+1. **Create/prepare project**
+   - Unity version: `2021.x` or newer.
+   - Platform target must be Android.
+   - Scripting backend must be IL2CPP.
+
+2. **Copy folders to exact paths**
+   - Copy `Assets/Plugins/Security` into your Unity project.
+   - Copy `Assets/Plugins/Android/Security` into your Unity project.
+   - Final paths must match exactly:
+     - `Assets/Plugins/Security/DeviceIdentitySDK.cs`
+     - `Assets/Plugins/Security/Models/DeviceIdentityModels.cs`
+     - `Assets/Plugins/Android/Security/src/main/java/com/company/security/...`
+
+3. **Reimport and verify Unity sees files**
+   - In Unity Project window, confirm all C# files are visible.
+   - Confirm Android/Kotlin files exist in the same package paths.
+   - If files are missing in Project view, right-click `Assets` → `Reimport`.
+
+4. **Player settings sanity**
+   - `Build Settings -> Android -> Switch Platform`.
+   - `Player Settings -> Other Settings`:
+     - `Minimum API Level`: 23+
+     - `Target Architectures`: include ARM64
+     - `Scripting Backend`: IL2CPP
+
+5. **Create one bootstrap script and run only once per session**
+   - Place bootstrap on login scene or matchmaking pre-check scene.
+   - Do not call `CollectAsync` repeatedly every frame.
+
+6. **Use the required call order (mandatory)**
+   - `GetChallengeAsync(...)`
+   - set `CollectOptions.nonceB64`
+   - `CollectAsync(...)`
+   - `VerifyWithServerAsync(...)`
+   - use `ServerVerdict` + `suggestedAction` for gating
+
+7. **Minimum production-safe `CollectOptions`**
+   - `sampleCount = 200`
+   - `sensorDurationMs = 1500`
+   - `enableWidevine = true`
+   - `enableAudit = true`
+   - `timeoutMs = 4000`
+
+8. **Expected successful behavior**
+   - `profile.localRiskScore` between `0..100`
+   - `profile.suggestedAction` one of `ALLOW/FRICTION/RESTRICT/BLOCK`
+   - `collectionMeta.errorCodes` should usually be empty on clean devices
+
+9. **Expected fallback behavior (non-Android or editor)**
+   - SDK returns fallback profile with `PLATFORM_UNSUPPORTED`.
+   - This is expected in editor tests.
+
+10. **Run SelfTest before shipping**
+    - Call `SelfTestAsync()` from QA menu.
+    - Verify booleans for keystore/widevine/accelerometer/proc readability.
+    - Track `timingsMs` to detect slow devices.
+
+11. **Do not treat one signal as absolute truth**
+    - Keep backend verify mandatory for final trust decisions.
+    - Use local action as pre-gate; server verdict as authoritative gate.
+
+### B) Backend setup (step-by-step with expected outputs)
+
+1. **Install dependencies and build**
+   - `cd backend`
+   - `npm install`
+   - `npm run build`
+
+2. **Prepare root pin configuration**
+   - Default pin file: `backend/config/attestation_root_pins.txt`.
+   - Add one pin per line (SHA-256 of DER root cert).
+   - Optional overrides:
+     - `ATTESTATION_ROOT_SHA256_PINS` (comma-separated)
+     - `ATTESTATION_ROOT_PIN_FILE` (absolute path)
+
+3. **Run service**
+   - `npm start`
+   - Expect startup log similar to:
+     - `[device-backend][INFO] Device identity backend listening on :8080`
+
+4. **Verify challenge endpoint first**
+   - Call `GET /device/challenge`.
+   - Expect JSON with `nonceB64` and `expiresAt`.
+
+5. **Verify endpoint contract (strict)**
+   - `POST /device/verify` must include:
+     - `app`, `attestation`, `ids`, `audit`, `clientScore`, `meta`
+   - Mandatory strict checks:
+     - `meta.nonceB64` present
+     - `meta.collectedAtEpochMs` present
+     - `meta.nonceB64 == attestation.challengeB64`
+
+6. **Expected reject responses**
+   - Invalid body: `PAYLOAD_INVALID`
+   - Expired/unknown nonce: `NONCE_INVALID_OR_EXPIRED`
+   - Nonce/challenge mismatch: `NONCE_ATTESTATION_MISMATCH`
+   - Old/skewed timestamp: `COLLECTION_TIMESTAMP_INVALID`
+
+7. **Expected success response**
+   - `verdict` in `ALLOW/FRICTION/RESTRICT/BLOCK`
+   - `riskScore` in `0..100`
+   - `reasonCodes` non-empty
+   - `ttlSeconds` present
+
+8. **Rollout safety checklist**
+   - Keep logs on for staging (`[device-backend]`, `[DeviceIdentitySDK]`, Android tags).
+   - Validate behavior on rooted, emulator, and clean physical devices.
+   - Validate timeout behavior under CPU stress.
+   - Confirm no pipeline logs store raw identifiers.
+
+### C) Quick troubleshooting map (symptom -> check)
+
+- **Symptom:** Always getting `PAYLOAD_INVALID`
+  - Check request JSON contains all top-level sections and `meta.nonceB64`.
+
+- **Symptom:** `NONCE_INVALID_OR_EXPIRED`
+  - Ensure challenge request happens immediately before collection/verify.
+  - Ensure nonce is not reused.
+
+- **Symptom:** `NONCE_ATTESTATION_MISMATCH`
+  - Ensure `opts.nonceB64` equals challenge nonce exactly.
+  - Ensure app is not overwriting options before collect call.
+
+- **Symptom:** High local score on clean test devices
+  - Inspect `collectionMeta.errorCodes` and audit findings.
+  - Run `SelfTestAsync()` to identify missing signals.
+
+- **Symptom:** Backend always returns restrictive verdicts
+  - Check attestation root pin configuration and reason codes.
+  - Verify server clock and client timestamp freshness window.
+
+- **Symptom:** No sensor fingerprint
+  - Accelerometer is required; gyro is optional.
+  - Confirm device has accelerometer and sensor sampling duration is not too low.
