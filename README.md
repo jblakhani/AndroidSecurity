@@ -77,6 +77,7 @@
 
 8. **Call server verification endpoint**
    - Use `VerifyWithServerAsync(profile, verifyEndpoint)` after collection.
+   - SDK caches verdicts in-memory until `ttlSeconds` expiry (cache key uses endpoint + app version + hashed Widevine + hashed sensor fingerprint).
    - Recommended flow:
      - `GET /device/challenge`
      - set `opts.nonceB64 = challenge.nonceB64`

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
@@ -12,6 +13,7 @@ namespace Company.Security
     public sealed class DeviceIdentitySDK
     {
         private const string BridgeClass = "com.company.security.DeviceIdentityBridge";
+        private static readonly ConcurrentDictionary<string, CachedVerdict> VerdictCache = new ConcurrentDictionary<string, CachedVerdict>();
 
         public async Task<ChallengeResponse> GetChallengeAsync(Uri challengeEndpoint)
         {
@@ -63,6 +65,13 @@ namespace Company.Security
             if (profile == null) throw new ArgumentNullException(nameof(profile));
             if (endpoint == null) throw new ArgumentNullException(nameof(endpoint));
 
+            var cacheKey = BuildCacheKey(profile, endpoint);
+            var nowEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (VerdictCache.TryGetValue(cacheKey, out var cached) && cached.ExpiresAtEpochMs > nowEpochMs)
+            {
+                return CloneVerdict(cached.Verdict);
+            }
+
             var request = new VerifyRequest
             {
                 app = profile.app,
@@ -90,6 +99,16 @@ namespace Company.Security
             var raw = await response.Content.ReadAsStringAsync();
             var verdict = JsonUtility.FromJson<ServerVerdict>(raw) ?? new ServerVerdict();
             verdict.rawJson = raw;
+
+            if (verdict.ttlSeconds > 0)
+            {
+                VerdictCache[cacheKey] = new CachedVerdict
+                {
+                    ExpiresAtEpochMs = nowEpochMs + (long)verdict.ttlSeconds * 1000L,
+                    Verdict = CloneVerdict(verdict)
+                };
+            }
+
             return verdict;
         }
 
@@ -106,6 +125,33 @@ namespace Company.Security
             await Task.Delay(1);
             return new SelfTestResult { errorCodes = new List<string> { "PLATFORM_UNSUPPORTED" }, timingsMs = new List<TimingEntry>() };
 #endif
+        }
+
+
+        private static string BuildCacheKey(DeviceRiskProfile profile, Uri endpoint)
+        {
+            var appVersion = profile.app?.appVersion ?? string.Empty;
+            var widevine = profile.widevineIdSha256 ?? string.Empty;
+            var sensor = profile.sensorFingerprintSha256 ?? string.Empty;
+            return $"{endpoint}|{appVersion}|{widevine}|{sensor}";
+        }
+
+        private static ServerVerdict CloneVerdict(ServerVerdict source)
+        {
+            return new ServerVerdict
+            {
+                verdict = source.verdict,
+                riskScore = source.riskScore,
+                reasonCodes = source.reasonCodes != null ? new List<string>(source.reasonCodes) : new List<string>(),
+                ttlSeconds = source.ttlSeconds,
+                rawJson = source.rawJson
+            };
+        }
+
+        private sealed class CachedVerdict
+        {
+            public long ExpiresAtEpochMs;
+            public ServerVerdict Verdict;
         }
 
         [Serializable]
