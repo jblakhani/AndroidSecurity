@@ -15,6 +15,83 @@
 - `Assets/Plugins/Android/Security/src/main/java/com/company/security/EnvironmentAudit.kt`
 - `Assets/Plugins/Android/Security/src/main/java/com/company/security/native-audit.cpp`
 
+## Step-by-step guide for Unity 3D engineer
+
+1. **Import plugin files into Unity project**
+   - Copy `Assets/Plugins/Security` and `Assets/Plugins/Android/Security` into your Unity project.
+   - In Unity Editor, verify Kotlin/Android plugin files are visible under `Assets/Plugins/Android/Security`.
+
+2. **Configure Unity Android player settings**
+   - Set **Build Settings → Platform = Android**.
+   - Set **Player Settings → Other Settings → Scripting Backend = IL2CPP**.
+   - Set **Target Architectures** to include at least `ARM64`.
+   - Set **Minimum API Level** to `Android 6.0 (API 23)` or higher.
+
+3. **Enable custom Gradle build (if your project requires it)**
+   - In **Player Settings → Publishing Settings**, enable:
+     - `Custom Main Gradle Template`
+     - `Custom Base Gradle Template` (if needed by your pipeline)
+   - Ensure your Unity-generated Gradle project includes this library module at build time.
+
+4. **Validate manifest and permissions policy**
+   - Confirm no dangerous permissions are added for this SDK.
+   - This SDK does not require `READ_PHONE_STATE` or other privileged identifiers.
+
+5. **Create game bootstrap script**
+   - Add a C# MonoBehaviour (for example `DeviceRiskBootstrap.cs`) and initialize SDK once (login/session start or matchmaking entry).
+
+6. **Collect risk profile with timeout-safe options**
+   - Example:
+   ```csharp
+   using Company.Security;
+   using Company.Security.Models;
+   using UnityEngine;
+
+   public class DeviceRiskBootstrap : MonoBehaviour
+   {
+       private readonly DeviceIdentitySDK _sdk = new DeviceIdentitySDK();
+
+       private async void Start()
+       {
+           var opts = new CollectOptions
+           {
+               sampleCount = 200,
+               sensorDurationMs = 1500,
+               enableWidevine = true,
+               enableAudit = true,
+               timeoutMs = 4000
+           };
+
+           DeviceRiskProfile profile = await _sdk.CollectAsync(opts);
+           Debug.Log($"Risk={profile.localRiskScore}, Action={profile.suggestedAction}");
+       }
+   }
+   ```
+
+7. **Call server verification endpoint**
+   - Use `VerifyWithServerAsync(profile, endpoint)` after collection.
+   - Recommended flow:
+     - Get nonce from `GET /device/challenge`
+     - Collect profile
+     - Send to `POST /device/verify`
+     - Cache `verdict` until TTL expiry
+
+8. **Use suggested action for game gating**
+   - `ALLOW`: normal flow
+   - `FRICTION`: add soft friction (extra validation/challenge)
+   - `RESTRICT`: reduce trust-sensitive actions
+   - `BLOCK`: deny high-risk entry
+
+9. **Run SelfTest in QA build**
+   - Call `SelfTestAsync()` to verify signal availability and timing without exposing raw identifiers.
+   - Use this during device matrix testing before production rollout.
+
+10. **Production rollout checklist**
+    - Test on Android 10–14 physical devices.
+    - Validate StrongBox fallback behavior on devices without StrongBox.
+    - Confirm timeout behavior under CPU pressure.
+    - Confirm no raw Widevine ID is logged/stored by analytics/crash tooling.
+
 ## Example request payload (`POST /device/verify`)
 
 ```json
