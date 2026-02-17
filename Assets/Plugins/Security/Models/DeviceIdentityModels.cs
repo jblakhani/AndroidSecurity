@@ -24,6 +24,10 @@ namespace Company.Security.Models
         public string buildFingerprint;
         public string manufacturer;
         public string model;
+        public string hardware;
+        public string device;
+        public string board;
+        public string product;
     }
 
     [Serializable]
