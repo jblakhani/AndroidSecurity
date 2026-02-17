@@ -23,7 +23,7 @@ class DeviceIdentityBridge {
             val startTotal = System.nanoTime()
             val errors = mutableListOf<String>()
 
-            Log.i(TAG, "collect start timeoutMs=${options.timeoutMs} sampleCount=${options.sampleCount} sensorDurationMs=${options.sensorDurationMs} enableWidevine=${options.enableWidevine} enableAudit=${options.enableAudit} hasNonce=${options.nonceB64.isNotBlank()}")
+            Log.i(TAG, ("collect start timeoutMs=${options.timeoutMs} sampleCount=${options.sampleCount} sensorDurationMs=${options.sensorDurationMs} enableWidevine=${options.enableWidevine} enableAudit=${options.enableAudit} hasNonce=${options.nonceB64.isNotBlank()}").toString())
 
             val executor = Executors.newSingleThreadExecutor()
             return try {
@@ -32,10 +32,14 @@ class DeviceIdentityBridge {
 
                     val app = JSONObject()
                         .put("appVersion", appVersion(context))
-                        .put("unityVersion", UnityPlayer.unityVersion)
+                        .put("unityVersion", getUnityVersion())
                         .put("buildFingerprint", Build.FINGERPRINT ?: "")
                         .put("manufacturer", Build.MANUFACTURER ?: "")
                         .put("model", Build.MODEL ?: "")
+                        .put("hardware", Build.HARDWARE ?: "")
+                        .put("device", Build.DEVICE ?: "")
+                        .put("board", Build.BOARD ?: "")
+                        .put("product", Build.PRODUCT ?: "")
 
                     val ksStart = nowMs()
                     val ks = KeystoreAttestation.attest(options.nonceB64)
@@ -74,7 +78,7 @@ class DeviceIdentityBridge {
                         .put("auditMs", timings["auditMs"] ?: 0)
                         .put("errorCodes", JSONArray(errors.sorted()))
                         .put("nonceB64", options.nonceB64)
-                        .put("collectedAtEpochMs", options.collectedAtEpochMs)
+                        .put("collectedAtEpochMs", java.lang.Long.valueOf(options.collectedAtEpochMs))
 
                     Log.i(TAG, "collect completed score=$score action=$action totalMs=${meta.getInt("totalMs")} errors=${errors.sorted()}")
 
@@ -110,7 +114,7 @@ class DeviceIdentityBridge {
                         .put("errorCodes", JSONArray(listOf("TIMEOUT")))
                         .put("totalMs", options.timeoutMs)
                         .put("nonceB64", options.nonceB64)
-                        .put("collectedAtEpochMs", options.collectedAtEpochMs)
+                        .put("collectedAtEpochMs", java.lang.Long.valueOf(options.collectedAtEpochMs))
                     )
                     .toString()
             } catch (e: Exception) {
@@ -122,7 +126,7 @@ class DeviceIdentityBridge {
                         .put("errorCodes", JSONArray(listOf("INTERNAL_EXCEPTION")))
                         .put("totalMs", nowMs())
                         .put("nonceB64", options.nonceB64)
-                        .put("collectedAtEpochMs", options.collectedAtEpochMs)
+                        .put("collectedAtEpochMs", java.lang.Long.valueOf(options.collectedAtEpochMs))
                     )
                     .toString()
             } finally {
@@ -245,6 +249,22 @@ class DeviceIdentityBridge {
                 pInfo.versionName ?: pInfo.longVersionCode.toString()
             } catch (_: Exception) {
                 ""
+            }
+        }
+
+        private fun getUnityVersion(): String {
+            return try {
+                val f = UnityPlayer::class.java.getDeclaredField("mUnityVersion")
+                f.isAccessible = true
+                (f.get(null) as? String) ?: ""
+            } catch (_: Exception) {
+                try {
+                    val f = UnityPlayer::class.java.getDeclaredField("unityVersion")
+                    f.isAccessible = true
+                    (f.get(null) as? String) ?: ""
+                } catch (_: Exception) {
+                    ""
+                }
             }
         }
 
