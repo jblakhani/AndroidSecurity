@@ -54,28 +54,46 @@ namespace Company.Security
                 using var bridge = new AndroidJavaClass(BridgeClass);
                 var json = JsonUtility.ToJson(opts);
                 var resultJson = bridge.CallStatic<string>("collect", json);
-                var result = JsonUtility.FromJson<DeviceRiskProfile>(resultJson);
-                LogInfo($"CollectAsync completed score={result?.localRiskScore}, action={result?.suggestedAction}, totalMs={result?.collectionMeta?.totalMs}");
+                var result = string.IsNullOrWhiteSpace(resultJson)
+                    ? null
+                    : JsonUtility.FromJson<DeviceRiskProfile>(resultJson);
+
+                if (result == null)
+                {
+                    LogError($"CollectAsync returned null/invalid JSON. rawLength={resultJson?.Length ?? 0}");
+                    return BuildCollectFallbackProfile(opts, "COLLECT_RESULT_PARSE_FAILED");
+                }
+
+                if (result.collectionMeta == null)
+                {
+                    result.collectionMeta = new CollectionMeta
+                    {
+                        errorCodes = new List<string> { "COLLECT_META_MISSING" },
+                        nonceB64 = opts.nonceB64,
+                        collectedAtEpochMs = opts.collectedAtEpochMs
+                    };
+                }
+                else
+                {
+                    result.collectionMeta.errorCodes ??= new List<string>();
+                    if (result.collectionMeta.collectedAtEpochMs <= 0)
+                    {
+                        result.collectionMeta.collectedAtEpochMs = opts.collectedAtEpochMs;
+                    }
+
+                    if (string.IsNullOrEmpty(result.collectionMeta.nonceB64))
+                    {
+                        result.collectionMeta.nonceB64 = opts.nonceB64;
+                    }
+                }
+
+                LogInfo($"CollectAsync completed score={result.localRiskScore}, action={result.suggestedAction}, totalMs={result.collectionMeta.totalMs}");
                 return result;
             });
 #else
             await Task.Delay(1);
-            var fallback = new DeviceRiskProfile
-            {
-                app = new AppInfo
-                {
-                    appVersion = Application.version,
-                    unityVersion = Application.unityVersion,
-                    buildFingerprint = "editor",
-                    manufacturer = SystemInfo.deviceManufacturer,
-                    model = SystemInfo.deviceModel
-                },
-                collectionMeta = new CollectionMeta { errorCodes = new List<string> { "PLATFORM_UNSUPPORTED" }, nonceB64 = opts.nonceB64, collectedAtEpochMs = opts.collectedAtEpochMs },
-                localRiskScore = 100,
-                suggestedAction = "BLOCK"
-            };
             LogWarning("CollectAsync running in non-Android/editor mode; returning PLATFORM_UNSUPPORTED fallback profile.");
-            return fallback;
+            return BuildCollectFallbackProfile(opts, "PLATFORM_UNSUPPORTED");
 #endif
         }
 
@@ -159,6 +177,30 @@ namespace Company.Security
             LogWarning("SelfTestAsync running in non-Android/editor mode; returning PLATFORM_UNSUPPORTED.");
             return new SelfTestResult { errorCodes = new List<string> { "PLATFORM_UNSUPPORTED" }, timingsMs = new List<TimingEntry>() };
 #endif
+        }
+
+
+        private static DeviceRiskProfile BuildCollectFallbackProfile(CollectOptions opts, string errorCode)
+        {
+            return new DeviceRiskProfile
+            {
+                app = new AppInfo
+                {
+                    appVersion = Application.version,
+                    unityVersion = Application.unityVersion,
+                    buildFingerprint = "editor",
+                    manufacturer = SystemInfo.deviceManufacturer,
+                    model = SystemInfo.deviceModel
+                },
+                collectionMeta = new CollectionMeta
+                {
+                    errorCodes = new List<string> { errorCode },
+                    nonceB64 = opts?.nonceB64,
+                    collectedAtEpochMs = opts?.collectedAtEpochMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                },
+                localRiskScore = 100,
+                suggestedAction = "BLOCK"
+            };
         }
 
         private static string BuildCacheKey(DeviceRiskProfile profile, Uri endpoint)
