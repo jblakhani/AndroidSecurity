@@ -49,22 +49,25 @@ namespace Company.Security
 
             LogInfo($"CollectAsync start timeoutMs={opts.timeoutMs}, sampleCount={opts.sampleCount}, sensorDurationMs={opts.sensorDurationMs}, enableWidevine={opts.enableWidevine}, enableAudit={opts.enableAudit}, hasNonce={!string.IsNullOrWhiteSpace(opts.nonceB64)}");
 #if UNITY_ANDROID && !UNITY_EDITOR
-            return await Task.Run(() =>
-            {
-                using var bridge = new AndroidJavaClass(BridgeClass);
-                var json = JsonUtility.ToJson(opts);
+            // Capture Unity API values on current (main) thread; bridge must run on main thread for UnityPlayer.currentActivity
+            var appVersion = GetAppVersionSafe();
+            var unityVersion = GetUnityVersionSafe();
+            var deviceModel = GetDeviceModelSafe();
 
+            using (var bridge = new AndroidJavaClass(BridgeClass))
+            {
+                var json = JsonUtility.ToJson(opts);
                 var resultJson = SafeCallCollect(bridge, json, out var bridgeCallErrorCode);
                 if (bridgeCallErrorCode != null)
                 {
-                    return BuildCollectFallbackProfile(opts, bridgeCallErrorCode);
+                    return BuildCollectFallbackProfile(opts, bridgeCallErrorCode, appVersion, unityVersion, deviceModel);
                 }
 
                 var result = JsonUtility.FromJson<DeviceRiskProfile>(resultJson);
                 if (result == null)
                 {
-                    LogError($"CollectAsync returned invalid JSON payload. rawLength={resultJson.Length}");
-                    return BuildCollectFallbackProfile(opts, "COLLECT_RESULT_PARSE_FAILED");
+                    LogError($"CollectAsync returned invalid JSON payload. rawLength={resultJson?.Length ?? 0}");
+                    return BuildCollectFallbackProfile(opts, "COLLECT_RESULT_PARSE_FAILED", appVersion, unityVersion, deviceModel);
                 }
 
                 if (result.collectionMeta == null)
@@ -92,7 +95,7 @@ namespace Company.Security
 
                 LogInfo($"CollectAsync completed score={result.localRiskScore}, action={result.suggestedAction}, totalMs={result.collectionMeta.totalMs}");
                 return result;
-            });
+            }
 #else
             await Task.Delay(1);
             LogWarning("CollectAsync running in non-Android/editor mode; returning PLATFORM_UNSUPPORTED fallback profile.");
@@ -114,34 +117,34 @@ namespace Company.Security
             }
 
             LogInfo($"VerifyWithServerAsync cache miss. Sending request to {endpoint}");
-            var request = new VerifyRequest
-            {
-                app = profile.app,
-                attestation = profile.keystoreAttestation,
-                ids = new IdSection
-                {
-                    widevineIdSha256 = profile.widevineIdSha256,
-                    sensorFingerprintSha256 = profile.sensorFingerprintSha256
-                },
-                audit = profile.environmentAudit,
-                clientScore = new ClientScoreSection
-                {
-                    localRiskScore = profile.localRiskScore,
-                    suggestedAction = profile.suggestedAction
-                },
-                meta = profile.collectionMeta
-            };
+            var requestDto = BuildVerifyRequestDto(profile);
 
             try
             {
                 using var client = new HttpClient();
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                var body = JsonUtility.ToJson(request);
+                var body = JsonUtility.ToJson(requestDto);
                 var content = new StringContent(body, Encoding.UTF8, "application/json");
                 var response = await client.PostAsync(endpoint, content, cts.Token);
-                response.EnsureSuccessStatusCode();
                 var raw = await response.Content.ReadAsStringAsync();
-                var verdict = JsonUtility.FromJson<ServerVerdict>(raw) ?? new ServerVerdict();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    LogError($"VerifyWithServerAsync failed for {endpoint}: {(int)response.StatusCode} ({response.ReasonPhrase}). Body: {raw}");
+                    var parsed = ParseVerdictResponse(raw);
+                    if (!string.IsNullOrEmpty(parsed?.verdict))
+                        return parsed;
+                    return new ServerVerdict
+                    {
+                        verdict = "ERROR",
+                        riskScore = -1,
+                        reasonCodes = new List<string> { $"HTTP_{(int)response.StatusCode}" },
+                        ttlSeconds = 0,
+                        rawJson = raw
+                    };
+                }
+
+                var verdict = ParseVerdictResponse(raw) ?? new ServerVerdict();
                 verdict.rawJson = raw;
 
                 if (verdict.ttlSeconds > 0)
@@ -161,6 +164,113 @@ namespace Company.Security
                 LogError($"VerifyWithServerAsync failed for {endpoint}: {ex.Message}");
                 throw;
             }
+        }
+
+        /// <summary>Builds a DTO matching server verifyRequestSchema (ServerProject): non-empty app strings, ids "" or 64 hex, arrays never null.</summary>
+        private static VerifyRequestDto BuildVerifyRequestDto(DeviceRiskProfile profile)
+        {
+            return new VerifyRequestDto
+            {
+                app = SanitizeApp(profile?.app),
+                attestation = ToAttestationDto(profile?.keystoreAttestation, profile?.collectionMeta?.nonceB64),
+                ids = new IdSection
+                {
+                    widevineIdSha256 = CoerceIdHash(profile?.widevineIdSha256),
+                    sensorFingerprintSha256 = CoerceIdHash(profile?.sensorFingerprintSha256)
+                },
+                audit = ToAuditDto(profile?.environmentAudit),
+                clientScore = new ClientScoreSection
+                {
+                    localRiskScore = Math.Max(0, Math.Min(100, profile?.localRiskScore ?? 0)),
+                    suggestedAction = CoerceSuggestedAction(profile?.suggestedAction)
+                },
+                meta = ToMetaDto(profile?.collectionMeta)
+            };
+        }
+
+        /// <summary>Server requires app.* strings min(1). Build fields (hardware, device, board, product) used by server for device fingerprint with IP.</summary>
+        private static AppInfo SanitizeApp(AppInfo app)
+        {
+            const string fallback = "Unknown";
+            const string emptyOk = "";
+            if (app == null)
+                return new AppInfo { appVersion = fallback, unityVersion = fallback, buildFingerprint = fallback, manufacturer = fallback, model = fallback, hardware = emptyOk, device = emptyOk, board = emptyOk, product = emptyOk };
+            return new AppInfo
+            {
+                appVersion = string.IsNullOrEmpty(app.appVersion) ? fallback : app.appVersion,
+                unityVersion = string.IsNullOrEmpty(app.unityVersion) ? fallback : app.unityVersion,
+                buildFingerprint = string.IsNullOrEmpty(app.buildFingerprint) ? fallback : app.buildFingerprint,
+                manufacturer = string.IsNullOrEmpty(app.manufacturer) ? fallback : app.manufacturer,
+                model = string.IsNullOrEmpty(app.model) ? fallback : app.model,
+                hardware = app.hardware ?? emptyOk,
+                device = app.device ?? emptyOk,
+                board = app.board ?? emptyOk,
+                product = app.product ?? emptyOk
+            };
+        }
+
+        /// <summary>Server expects 64 hex chars or "".</summary>
+        private static string CoerceIdHash(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            if (value.Length != 64) return "";
+            for (var i = 0; i < value.Length; i++)
+            {
+                var c = value[i];
+                if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) return "";
+            }
+            return value;
+        }
+
+        private static string CoerceSuggestedAction(string value)
+        {
+            if (value == "ALLOW" || value == "FRICTION" || value == "RESTRICT" || value == "BLOCK") return value;
+            return "ALLOW";
+        }
+
+        /// <summary>Server requires attestation; certChainB64 must be array (can be empty).</summary>
+        private static KeystoreAttestationDto ToAttestationDto(KeystoreAttestation a, string fallbackChallengeB64)
+        {
+            var challengeB64 = (a != null && !string.IsNullOrEmpty(a.challengeB64)) ? a.challengeB64 : (fallbackChallengeB64 ?? "");
+            var certChainB64 = (a?.certChainB64 != null && a.certChainB64.Count > 0) ? a.certChainB64.ToArray() : new string[0];
+            return new KeystoreAttestationDto
+            {
+                challengeB64 = challengeB64,
+                certChainB64 = certChainB64,
+                errorCode = a?.errorCode
+            };
+        }
+
+        /// <summary>Server requires audit with findings array (can be empty).</summary>
+        private static EnvironmentAuditDto ToAuditDto(EnvironmentAudit a)
+        {
+            if (a == null)
+                return new EnvironmentAuditDto { rootScore = 0, hookScore = 0, virtScore = 0, tamperScore = 0, findings = new string[0], errorCode = null };
+            return new EnvironmentAuditDto
+            {
+                rootScore = a.rootScore,
+                hookScore = a.hookScore,
+                virtScore = a.virtScore,
+                tamperScore = a.tamperScore,
+                findings = a.findings != null && a.findings.Count > 0 ? a.findings.ToArray() : new string[0],
+                errorCode = a.errorCode
+            };
+        }
+
+        private static CollectionMetaDto ToMetaDto(CollectionMeta m)
+        {
+            if (m == null) return null;
+            return new CollectionMetaDto
+            {
+                totalMs = m.totalMs,
+                keystoreMs = m.keystoreMs,
+                widevineMs = m.widevineMs,
+                sensorMs = m.sensorMs,
+                auditMs = m.auditMs,
+                errorCodes = m.errorCodes != null ? m.errorCodes.ToArray() : null,
+                nonceB64 = m.nonceB64 ?? "",
+                collectedAtEpochMs = m.collectedAtEpochMs < 0 ? 0 : m.collectedAtEpochMs
+            };
         }
 
         public async Task<SelfTestResult> SelfTestAsync(int timeoutMs = 4000)
@@ -225,17 +335,32 @@ namespace Company.Security
             return null;
         }
 
-        private static DeviceRiskProfile BuildCollectFallbackProfile(CollectOptions opts, string errorCode)
+        private static string GetAppVersionSafe()
+        {
+            try { return Application.version ?? ""; } catch { return ""; }
+        }
+
+        private static string GetUnityVersionSafe()
+        {
+            try { return Application.unityVersion ?? ""; } catch { return ""; }
+        }
+
+        private static string GetDeviceModelSafe()
+        {
+            try { return SystemInfo.deviceModel ?? ""; } catch { return ""; }
+        }
+
+        private static DeviceRiskProfile BuildCollectFallbackProfile(CollectOptions opts, string errorCode, string appVersion = null, string unityVersion = null, string deviceModel = null)
         {
             return new DeviceRiskProfile
             {
                 app = new AppInfo
                 {
-                    appVersion = Application.version,
-                    unityVersion = Application.unityVersion,
+                    appVersion = appVersion ?? GetAppVersionSafe(),
+                    unityVersion = unityVersion ?? GetUnityVersionSafe(),
                     buildFingerprint = "editor",
-                    manufacturer = SystemInfo.deviceManufacturer,
-                    model = SystemInfo.deviceModel
+                    manufacturer = "",
+                    model = deviceModel ?? GetDeviceModelSafe()
                 },
                 collectionMeta = new CollectionMeta
                 {
@@ -268,6 +393,26 @@ namespace Company.Security
             };
         }
 
+        /// <summary>Parse server JSON into ServerVerdict; uses array DTO so JsonUtility fills reasonCodes.</summary>
+        private static ServerVerdict ParseVerdictResponse(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            try
+            {
+                var dto = JsonUtility.FromJson<ServerVerdictDto>(raw);
+                if (dto == null) return null;
+                return new ServerVerdict
+                {
+                    verdict = dto.verdict,
+                    riskScore = dto.riskScore,
+                    reasonCodes = dto.reasonCodes != null ? new List<string>(dto.reasonCodes) : new List<string>(),
+                    ttlSeconds = dto.ttlSeconds,
+                    rawJson = raw
+                };
+            }
+            catch { return null; }
+        }
+
         private static void LogInfo(string message) => Debug.Log($"{LogTag} {message}");
         private static void LogWarning(string message) => Debug.LogWarning($"{LogTag} {message}");
         private static void LogError(string message) => Debug.LogError($"{LogTag} {message}");
@@ -279,14 +424,55 @@ namespace Company.Security
         }
 
         [Serializable]
-        private class VerifyRequest
+        private class ServerVerdictDto
+        {
+            public string verdict;
+            public int riskScore;
+            public string[] reasonCodes;
+            public int ttlSeconds;
+        }
+
+        [Serializable]
+        private class VerifyRequestDto
         {
             public AppInfo app;
-            public KeystoreAttestation attestation;
+            public KeystoreAttestationDto attestation;
             public IdSection ids;
-            public EnvironmentAudit audit;
+            public EnvironmentAuditDto audit;
             public ClientScoreSection clientScore;
-            public CollectionMeta meta;
+            public CollectionMetaDto meta;
+        }
+
+        [Serializable]
+        private class KeystoreAttestationDto
+        {
+            public string challengeB64;
+            public string[] certChainB64;
+            public string errorCode;
+        }
+
+        [Serializable]
+        private class EnvironmentAuditDto
+        {
+            public int rootScore;
+            public int hookScore;
+            public int virtScore;
+            public int tamperScore;
+            public string[] findings;
+            public string errorCode;
+        }
+
+        [Serializable]
+        private class CollectionMetaDto
+        {
+            public int totalMs;
+            public int keystoreMs;
+            public int widevineMs;
+            public int sensorMs;
+            public int auditMs;
+            public string[] errorCodes;
+            public string nonceB64;
+            public long collectedAtEpochMs;
         }
 
         [Serializable]
