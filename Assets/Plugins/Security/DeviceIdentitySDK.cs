@@ -53,14 +53,17 @@ namespace Company.Security
             {
                 using var bridge = new AndroidJavaClass(BridgeClass);
                 var json = JsonUtility.ToJson(opts);
-                var resultJson = bridge.CallStatic<string>("collect", json);
-                var result = string.IsNullOrWhiteSpace(resultJson)
-                    ? null
-                    : JsonUtility.FromJson<DeviceRiskProfile>(resultJson);
 
+                var resultJson = SafeCallCollect(bridge, json, out var bridgeCallErrorCode);
+                if (bridgeCallErrorCode != null)
+                {
+                    return BuildCollectFallbackProfile(opts, bridgeCallErrorCode);
+                }
+
+                var result = JsonUtility.FromJson<DeviceRiskProfile>(resultJson);
                 if (result == null)
                 {
-                    LogError($"CollectAsync returned null/invalid JSON. rawLength={resultJson?.Length ?? 0}");
+                    LogError($"CollectAsync returned invalid JSON payload. rawLength={resultJson.Length}");
                     return BuildCollectFallbackProfile(opts, "COLLECT_RESULT_PARSE_FAILED");
                 }
 
@@ -179,6 +182,48 @@ namespace Company.Security
 #endif
         }
 
+
+
+        private static string SafeCallCollect(AndroidJavaClass bridge, string json, out string bridgeCallErrorCode)
+        {
+            bridgeCallErrorCode = null;
+            const int maxAttempts = 2;
+
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                try
+                {
+                    var resultJson = bridge.CallStatic<string>("collect", json);
+                    if (!string.IsNullOrWhiteSpace(resultJson))
+                    {
+                        return resultJson;
+                    }
+
+                    LogWarning($"CollectAsync bridge returned empty payload on attempt {attempt}/{maxAttempts}.");
+                }
+                catch (AndroidJavaException ex)
+                {
+                    LogError($"CollectAsync Android bridge exception on attempt {attempt}/{maxAttempts}: {ex.Message}");
+                    bridgeCallErrorCode = "COLLECT_BRIDGE_EXCEPTION";
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    LogError($"CollectAsync bridge call failed on attempt {attempt}/{maxAttempts}: {ex.Message}");
+                    bridgeCallErrorCode = "COLLECT_BRIDGE_CALL_FAILED";
+                    return null;
+                }
+
+                if (attempt < maxAttempts)
+                {
+                    Thread.Sleep(80);
+                }
+            }
+
+            bridgeCallErrorCode = "COLLECT_BRIDGE_EMPTY_RESULT";
+            LogError("CollectAsync bridge returned empty payload after retries.");
+            return null;
+        }
 
         private static DeviceRiskProfile BuildCollectFallbackProfile(CollectOptions opts, string errorCode)
         {
