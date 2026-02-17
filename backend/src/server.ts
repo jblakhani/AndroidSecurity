@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from "express";
+import { createHash } from "crypto";
 import { verifyRequestSchema, type VerifyResponse } from "./types.js";
 import { randomNonceB64, nowEpochMs } from "./crypto.js";
 import { InMemoryStore } from "./store.js";
@@ -6,6 +7,7 @@ import { verifyAttestationChain } from "./attestation.js";
 import { computeRisk } from "./risk.js";
 
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json({ limit: "256kb" }));
 
 const store = new InMemoryStore();
@@ -83,6 +85,21 @@ app.post("/device/verify", (req: Request, res: Response) => {
     return;
   }
 
+  const clientIp = (
+    req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim() ??
+    req.socket?.remoteAddress ??
+    ""
+  ).trim();
+  const appFields = payload.app;
+  const manufacturer = (appFields.manufacturer ?? "").trim();
+  const model = (appFields.model ?? "").trim();
+  const hardware = (appFields.hardware ?? "").trim();
+  const device = (appFields.device ?? "").trim();
+  const board = (appFields.board ?? "").trim();
+  const product = (appFields.product ?? "").trim();
+  const fingerprintInput = [manufacturer, model, hardware, device, board, product, clientIp].join("|");
+  const deviceFingerprintWithIpSha256 = createHash("sha256").update(fingerprintInput, "utf8").digest("hex");
+
   const attestation = verifyAttestationChain(payload.attestation.challengeB64, payload.attestation.certChainB64);
 
   const sensorHash = payload.ids.sensorFingerprintSha256;
@@ -109,15 +126,24 @@ app.post("/device/verify", (req: Request, res: Response) => {
     verdict: risk.verdict,
     riskScore: Math.max(risk.score, payload.clientScore.localRiskScore),
     reasonCodes: Array.from(new Set(mergedReasons)).sort(),
-    ttlSeconds: VERDICT_TTL_SECONDS
+    ttlSeconds: VERDICT_TTL_SECONDS,
+    deviceFingerprintWithIpSha256
   };
 
-  logInfo("verify completed", {
-    verdict: response.verdict,
-    riskScore: response.riskScore,
-    clientScore: payload.clientScore.localRiskScore,
-    attestationOk: attestation.ok,
-    reasonCount: response.reasonCodes.length
+  //logInfo("verify completed", {
+    //verdict: response.verdict,
+    //riskScore: response.riskScore,
+    //clientScore: payload.clientScore.localRiskScore,
+    //attestationOk: attestation.ok,
+    //reasonCount: response.reasonCodes.length,
+    //widevineIdSha256: widevineHash || undefined,
+    //sensorFingerprintSha256: sensorHash || undefined
+  //});
+
+  logInfo("device fingerprint, Device fingerprint with IP", {
+    deviceFingerprintWithIpSha256,
+    widevineIdSha256: widevineHash === "" ? "(empty)" : widevineHash,
+    //sensorFingerprintSha256: sensorHash === "" ? "(empty)" : sensorHash
   });
 
   res.status(200).json(response);

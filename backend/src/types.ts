@@ -5,7 +5,11 @@ const appSchema = z.object({
   unityVersion: z.string().min(1),
   buildFingerprint: z.string().min(1),
   manufacturer: z.string().min(1),
-  model: z.string().min(1)
+  model: z.string().min(1),
+  hardware: z.string().optional().default(""),
+  device: z.string().optional().default(""),
+  board: z.string().optional().default(""),
+  product: z.string().optional().default("")
 });
 
 const attestationSchema = z.object({
@@ -60,4 +64,5 @@ export type VerifyResponse = {
   riskScore: number;
   reasonCodes: string[];
   ttlSeconds: number;
+  deviceFingerprintWithIpSha256?: string;
 };

@@ -1,4 +1,4 @@
-import { X509Certificate, createHash, createPublicKey } from "crypto";
+import { X509Certificate, createHash } from "crypto";
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 
@@ -60,13 +60,13 @@ export function verifyAttestationChain(challengeB64: string, certChainB64: strin
   for (let i = 0; i < certs.length - 1; i++) {
     const child = certs[i];
     const issuer = certs[i + 1];
-    if (!child.verify(createPublicKey(issuer.publicKey))) {
+    if (!child.verify(issuer.publicKey)) {
       return { ok: false, reasonCodes: ["ATTESTATION_CHAIN_SIGNATURE_INVALID"] };
     }
   }
 
   const root = certs[certs.length - 1];
-  if (!root.verify(createPublicKey(root.publicKey))) {
+  if (!root.verify(root.publicKey)) {
     return { ok: false, reasonCodes: ["ATTESTATION_ROOT_NOT_SELF_SIGNED"] };
   }
 
